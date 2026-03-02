@@ -13,6 +13,7 @@ from .schemas import DynamicsField, DynamicsInterval, INTERVAL_SECONDS, coerce_d
 class CatalogReadRepository:
     PRODUCT_SORTS: dict[str, str] = {
         "observed_at_desc": "c.observed_at_latest DESC, c.canonical_product_id ASC",
+        "observed_at_asc": "c.observed_at_latest ASC, c.canonical_product_id ASC",
         "price_asc": "(c.price_from IS NULL) ASC, c.price_from ASC, c.canonical_product_id ASC",
         "price_desc": "(c.price_from IS NULL) ASC, c.price_from DESC, c.canonical_product_id ASC",
         "rating_desc": "(r.rating IS NULL) ASC, r.rating DESC, c.canonical_product_id ASC",

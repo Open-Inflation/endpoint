@@ -514,6 +514,17 @@ class EndpointApiTests(unittest.TestCase):
         self.assertIn("canonical_product_id", first)
         self.assertIn("parsers", first)
 
+    def test_list_products_supports_observed_at_asc(self) -> None:
+        response = self.client.get(
+            "/products",
+            params={"limit": 10, "offset": 0, "sort": "observed_at_asc"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertGreaterEqual(len(payload["items"]), 2)
+        self.assertEqual(payload["items"][0]["canonical_product_id"], "prod-1")
+        self.assertEqual(payload["items"][1]["canonical_product_id"], "prod-2")
+
     def test_sources_and_snapshots(self) -> None:
         sources = self.client.get("/products/prod-1/sources", params={"limit": 10, "offset": 0})
         self.assertEqual(sources.status_code, 200)
