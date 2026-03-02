@@ -87,6 +87,10 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             composition_original TEXT,
             composition_normalized TEXT,
             settlement_id INTEGER,
+            source_event_uid TEXT,
+            content_fingerprint TEXT,
+            valid_from_at TEXT,
+            valid_to_at TEXT,
             observed_at TEXT NOT NULL,
             created_at TEXT NOT NULL
         )
@@ -341,8 +345,10 @@ def _seed_data(conn: sqlite3.Connection) -> None:
             id, canonical_product_id, parser_name, source_id, title_original, title_normalized_no_stopwords,
             brand, price, discount_price, loyal_price, price_unit, rating, reviews_count, unit,
             available_count, package_quantity, package_unit, category_normalized, geo_normalized,
-            composition_original, composition_normalized, settlement_id, observed_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            composition_original, composition_normalized, settlement_id,
+            source_event_uid, content_fingerprint, valid_from_at, valid_to_at,
+            observed_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -368,6 +374,10 @@ def _seed_data(conn: sqlite3.Connection) -> None:
                 "milk",
                 "milk",
                 1,
+                "evt-101",
+                "fp-101",
+                "2026-02-01T10:00:00+00:00",
+                "2026-02-01T10:00:00+00:00",
                 "2026-02-01T10:00:00+00:00",
                 now,
             ),
@@ -394,6 +404,10 @@ def _seed_data(conn: sqlite3.Connection) -> None:
                 "milk",
                 "milk",
                 1,
+                "evt-102",
+                "fp-102",
+                "2026-02-01T15:00:00+00:00",
+                "2026-02-01T15:00:00+00:00",
                 "2026-02-01T15:00:00+00:00",
                 now,
             ),
@@ -420,6 +434,10 @@ def _seed_data(conn: sqlite3.Connection) -> None:
                 "milk",
                 "milk",
                 1,
+                "evt-103",
+                "fp-103",
+                "2026-02-03T09:00:00+00:00",
+                "2026-02-03T09:00:00+00:00",
                 "2026-02-03T09:00:00+00:00",
                 now,
             ),
@@ -446,7 +464,41 @@ def _seed_data(conn: sqlite3.Connection) -> None:
                 "milk",
                 "milk",
                 1,
+                "evt-104",
+                "fp-104",
                 "2026-02-02T12:00:00+00:00",
+                "2026-02-02T12:00:00+00:00",
+                "2026-02-02T12:00:00+00:00",
+                now,
+            ),
+            (
+                201,
+                "prod-interval",
+                "fixprice",
+                "receiver:run-interval:1",
+                "Stable Milk",
+                "stable milk",
+                "Brand C",
+                77.0,
+                None,
+                None,
+                "RUB",
+                None,
+                None,
+                "PCE",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "evt-201",
+                "fp-201",
+                "2026-02-10T10:00:00+00:00",
+                "2026-02-10T12:00:00+00:00",
+                "2026-02-10T12:00:00+00:00",
                 now,
             ),
         ],
@@ -539,7 +591,10 @@ class EndpointApiTests(unittest.TestCase):
         self.assertEqual(snapshots.status_code, 200)
         snapshots_payload = snapshots.json()
         self.assertEqual(snapshots_payload["meta"]["total"], 3)
-        self.assertTrue(snapshots_payload["items"][0]["categories"])
+        first_snapshot = snapshots_payload["items"][0]
+        self.assertTrue(first_snapshot["categories"])
+        self.assertEqual(first_snapshot["valid_from_at"], "2026-02-03T09:00:00Z")
+        self.assertEqual(first_snapshot["valid_to_at"], "2026-02-03T09:00:00Z")
 
     def test_categories_settlements_and_cursors(self) -> None:
         categories = self.client.get("/categories", params={"limit": 10, "offset": 0})
@@ -588,6 +643,26 @@ class EndpointApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["values"], [90.0])
+
+    def test_dynamics_uses_valid_interval_for_reused_snapshot(self) -> None:
+        response = self.client.get(
+            "/products/prod-interval/dynamics",
+            params={
+                "parser_name": "fixprice",
+                "source_id": "receiver:run-interval:1",
+                "field": "price",
+                "interval": "1h",
+                "date_from": "2026-02-10T10:00:00Z",
+                "date_to": "2026-02-10T12:00:00Z",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            payload["dates"],
+            ["2026-02-10T10:00:00Z", "2026-02-10T11:00:00Z", "2026-02-10T12:00:00Z"],
+        )
+        self.assertEqual(payload["values"], [77.0, 77.0, 77.0])
 
     def test_dynamics_invalid_field_returns_400(self) -> None:
         response = self.client.get(

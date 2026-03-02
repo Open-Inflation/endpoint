@@ -63,9 +63,20 @@ Response shape:
 }
 ```
 
+`dynamics` учитывает интервальный контракт `converter`: если у snapshot есть
+`valid_from_at/valid_to_at`, значение распространяется на весь интервал.
+Для старых данных без этих колонок используется `observed_at`.
+
 ## Recommended DB index
 
 ```sql
-CREATE INDEX idx_catalog_snapshots_series
-ON catalog_product_snapshots(canonical_product_id, parser_name, source_id, observed_at);
+CREATE INDEX idx_catalog_snapshots_series_interval
+ON catalog_product_snapshots(
+  canonical_product_id,
+  parser_name,
+  source_id,
+  valid_from_at,
+  valid_to_at,
+  observed_at
+);
 ```

@@ -394,6 +394,8 @@ class CatalogReadRepository:
         for row in rows:
             observed_at = coerce_datetime(row["observed_at"])
             created_at = coerce_datetime(row["created_at"])
+            valid_from_value = row.get("valid_from_at")
+            valid_to_value = row.get("valid_to_at")
             settlement_id = row.get("settlement_id")
             items.append(
                 {
@@ -418,6 +420,16 @@ class CatalogReadRepository:
                     "geo_normalized": self._safe_str(row.get("geo_normalized")),
                     "composition_original": self._safe_str(row.get("composition_original")),
                     "composition_normalized": self._safe_str(row.get("composition_normalized")),
+                    "valid_from_at": (
+                        to_iso_z(coerce_datetime(valid_from_value))
+                        if valid_from_value is not None
+                        else None
+                    ),
+                    "valid_to_at": (
+                        to_iso_z(coerce_datetime(valid_to_value))
+                        if valid_to_value is not None
+                        else None
+                    ),
                     "observed_at": to_iso_z(observed_at),
                     "created_at": to_iso_z(created_at),
                     "categories": categories_by_snapshot.get(int(row["id"]), []),
@@ -668,13 +680,17 @@ class CatalogReadRepository:
         # `field` is injected only from strict whitelist above.
         series_sql = text(
             f"""
-            SELECT observed_at, {field} AS metric_value
+            SELECT
+                observed_at,
+                COALESCE(valid_from_at, observed_at) AS valid_from_at,
+                COALESCE(valid_to_at, observed_at) AS valid_to_at,
+                {field} AS metric_value
             FROM catalog_product_snapshots
             WHERE canonical_product_id = :canonical_product_id
               AND parser_name = :parser_name
               AND source_id = :source_id
-              AND observed_at >= :date_from
-              AND observed_at <= :date_to
+              AND COALESCE(valid_from_at, observed_at) <= :date_to
+              AND COALESCE(valid_to_at, observed_at) >= :date_from
             ORDER BY observed_at ASC, id ASC
             """
         )
@@ -691,14 +707,28 @@ class CatalogReadRepository:
         bucket_latest: dict[int, tuple[datetime, float | None]] = {}
         for row in rows:
             observed_at = coerce_datetime(row["observed_at"])
-            delta_seconds = (observed_at - date_from).total_seconds()
-            bucket = int(delta_seconds // step_seconds)
-            if bucket < 0 or bucket >= point_count:
+            valid_from_at = coerce_datetime(row["valid_from_at"])
+            valid_to_at = coerce_datetime(row["valid_to_at"])
+            if valid_to_at < valid_from_at:
+                valid_from_at, valid_to_at = valid_to_at, valid_from_at
+
+            interval_from = valid_from_at if valid_from_at >= date_from else date_from
+            interval_to = valid_to_at if valid_to_at <= date_to else date_to
+            if interval_to < interval_from:
                 continue
+
+            start_bucket = int(((interval_from - date_from).total_seconds()) // step_seconds)
+            end_bucket = int(((interval_to - date_from).total_seconds()) // step_seconds)
+            if end_bucket < 0 or start_bucket >= point_count:
+                continue
+            start_bucket = max(0, start_bucket)
+            end_bucket = min(point_count - 1, end_bucket)
+
             value = self._as_float(row.get("metric_value"))
-            current = bucket_latest.get(bucket)
-            if current is None or observed_at >= current[0]:
-                bucket_latest[bucket] = (observed_at, value)
+            for bucket in range(start_bucket, end_bucket + 1):
+                current = bucket_latest.get(bucket)
+                if current is None or observed_at >= current[0]:
+                    bucket_latest[bucket] = (observed_at, value)
 
         dates: list[str] = []
         values: list[float | None] = []
