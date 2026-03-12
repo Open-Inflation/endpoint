@@ -518,6 +518,81 @@ class EndpointApiTests(unittest.TestCase):
         self.assertEqual(first_snapshot["valid_from_at"], "2026-02-03T09:00:00Z")
         self.assertEqual(first_snapshot["valid_to_at"], "2026-02-03T09:00:00Z")
 
+    def test_common_products_count_for_all_stores(self) -> None:
+        response = self.client.get("/products/common/count", params={"scope": "stores"})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["scope"], "stores")
+        self.assertEqual(payload["required_stores"], 2)
+        self.assertEqual(payload["common_products_count"], 1)
+
+    def test_common_products_count_for_two_stores(self) -> None:
+        response = self.client.get(
+            "/products/common/count",
+            params=[
+                ("scope", "stores"),
+                ("store", "fixprice"),
+                ("store", "chizhik"),
+            ],
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["scope"], "stores")
+        self.assertEqual(payload["stores"], ["fixprice", "chizhik"])
+        self.assertEqual(payload["required_stores"], 2)
+        self.assertEqual(payload["common_products_count"], 1)
+
+    def test_common_products_count_for_single_store(self) -> None:
+        response = self.client.get(
+            "/products/common/count",
+            params={"scope": "stores", "store": "fixprice"},
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["scope"], "stores")
+        self.assertEqual(payload["required_stores"], 1)
+        self.assertEqual(payload["common_products_count"], 2)
+
+    def test_common_products_count_for_regions(self) -> None:
+        response = self.client.get("/products/common/count", params={"scope": "regions"})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["scope"], "regions")
+        self.assertEqual(payload["required_regions"], 1)
+        self.assertEqual(payload["common_products_count"], 2)
+
+        missing_region = self.client.get(
+            "/products/common/count",
+            params=[
+                ("scope", "regions"),
+                ("region", "moscow"),
+                ("region", "spb"),
+            ],
+        )
+        self.assertEqual(missing_region.status_code, 200)
+        self.assertEqual(missing_region.json()["required_regions"], 2)
+        self.assertEqual(missing_region.json()["common_products_count"], 0)
+
+    def test_common_products_count_rejects_invalid_scope(self) -> None:
+        response = self.client.get(
+            "/products/common/count",
+            params={"scope": "unknown"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_common_products_count_rejects_legacy_scopes(self) -> None:
+        legacy_all = self.client.get(
+            "/products/common/count",
+            params={"scope": "all_stores"},
+        )
+        self.assertEqual(legacy_all.status_code, 400)
+
+        legacy_two = self.client.get(
+            "/products/common/count",
+            params=[("scope", "two_stores"), ("store", "fixprice"), ("store", "chizhik")],
+        )
+        self.assertEqual(legacy_two.status_code, 400)
+
     def test_categories_settlements_and_cursors(self) -> None:
         categories = self.client.get("/categories", params={"limit": 10, "offset": 0})
         self.assertEqual(categories.status_code, 200)

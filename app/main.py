@@ -169,6 +169,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except LookupError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
+    @app.get("/products/common/count")
+    def count_common_products(
+        scope: str = Query("all_stores"),
+        store: list[str] | None = Query(None),
+        region: list[str] | None = Query(None),
+    ) -> dict[str, object]:
+        try:
+            return repository.count_common_products(
+                scope=scope,
+                stores=store,
+                regions=region,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     @app.get("/categories")
     def list_categories(
         limit: int = Query(20, ge=1, le=100),

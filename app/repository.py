@@ -613,6 +613,168 @@ class CatalogReadRepository:
 
         return {"items": items}
 
+    def count_common_products(
+        self,
+        *,
+        scope: str,
+        stores: list[str] | None = None,
+        regions: list[str] | None = None,
+    ) -> dict[str, Any]:
+        normalized_scope = (scope or "").strip().lower()
+        if normalized_scope not in {"stores", "regions"}:
+            raise ValueError("scope must be one of: stores, regions")
+
+        normalized_stores = self._normalize_filter_tokens(stores)
+        normalized_regions = self._normalize_filter_tokens(regions)
+
+        if normalized_scope == "stores":
+            common_count, required_stores = self._count_common_by_stores(
+                stores=normalized_stores,
+                regions=normalized_regions,
+            )
+            return {
+                "scope": normalized_scope,
+                "common_products_count": common_count,
+                "required_stores": required_stores,
+                "required_regions": None,
+                "stores": normalized_stores or None,
+                "regions": normalized_regions or None,
+            }
+
+        common_count, required_regions = self._count_common_by_regions(
+            regions=normalized_regions,
+            stores=normalized_stores,
+        )
+        return {
+            "scope": normalized_scope,
+            "common_products_count": common_count,
+            "required_stores": None,
+            "required_regions": required_regions,
+            "stores": normalized_stores or None,
+            "regions": normalized_regions or None,
+        }
+
+    def _count_common_by_stores(
+        self,
+        *,
+        stores: list[str],
+        regions: list[str],
+    ) -> tuple[int, int]:
+        params: dict[str, Any] = {}
+        where_clauses = ["cp.canonical_product_id IS NOT NULL"]
+        if stores:
+            store_in_clause = self._build_text_in_clause("store", stores, params)
+            where_clauses.append(f"LOWER(cp.parser_name) IN ({store_in_clause})")
+
+        join_sql = ""
+        if regions:
+            join_sql = "LEFT JOIN catalog_settlements cs ON cs.id = cp.settlement_id"
+            region_expr = "LOWER(COALESCE(cs.region_normalized, cs.region, ''))"
+            region_in_clause = self._build_text_in_clause("reg", regions, params)
+            where_clauses.append(f"{region_expr} IN ({region_in_clause})")
+
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+        required_sql = (
+            "SELECT :required_stores AS required_stores"
+            if stores
+            else "SELECT COUNT(DISTINCT parser_name) AS required_stores FROM base"
+        )
+        if stores:
+            params["required_stores"] = len(stores)
+
+        sql = text(
+            f"""
+            WITH base AS (
+                SELECT DISTINCT cp.canonical_product_id, LOWER(cp.parser_name) AS parser_name
+                FROM catalog_products cp
+                {join_sql}
+                {where_sql}
+            ),
+            required AS (
+                {required_sql}
+            ),
+            overlap AS (
+                SELECT canonical_product_id
+                FROM base
+                GROUP BY canonical_product_id
+                HAVING COUNT(DISTINCT parser_name) = (SELECT required_stores FROM required)
+                   AND (SELECT required_stores FROM required) > 0
+            )
+            SELECT
+                COALESCE((SELECT required_stores FROM required), 0) AS required_stores,
+                COUNT(*) AS common_products_count
+            FROM overlap
+            """
+        )
+
+        with self._engine.connect() as connection:
+            row = connection.execute(sql, params).mappings().one()
+        return (
+            int(row.get("common_products_count") or 0),
+            int(row.get("required_stores") or 0),
+        )
+
+    def _count_common_by_regions(
+        self,
+        *,
+        regions: list[str],
+        stores: list[str],
+    ) -> tuple[int, int]:
+        params: dict[str, Any] = {}
+        region_expr = "LOWER(COALESCE(cs.region_normalized, cs.region, ''))"
+        where_clauses = [
+            "cp.canonical_product_id IS NOT NULL",
+            f"{region_expr} <> ''",
+        ]
+        if regions:
+            region_in_clause = self._build_text_in_clause("reg", regions, params)
+            where_clauses.append(f"{region_expr} IN ({region_in_clause})")
+        if stores:
+            store_in_clause = self._build_text_in_clause("store", stores, params)
+            where_clauses.append(f"LOWER(cp.parser_name) IN ({store_in_clause})")
+
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+        required_sql = (
+            "SELECT :required_regions AS required_regions"
+            if regions
+            else "SELECT COUNT(DISTINCT region_key) AS required_regions FROM base"
+        )
+        if regions:
+            params["required_regions"] = len(regions)
+
+        sql = text(
+            f"""
+            WITH base AS (
+                SELECT DISTINCT cp.canonical_product_id, {region_expr} AS region_key
+                FROM catalog_products cp
+                JOIN catalog_settlements cs
+                  ON cs.id = cp.settlement_id
+                {where_sql}
+            ),
+            required AS (
+                {required_sql}
+            ),
+            overlap AS (
+                SELECT canonical_product_id
+                FROM base
+                GROUP BY canonical_product_id
+                HAVING COUNT(DISTINCT region_key) = (SELECT required_regions FROM required)
+                   AND (SELECT required_regions FROM required) > 0
+            )
+            SELECT
+                COALESCE((SELECT required_regions FROM required), 0) AS required_regions,
+                COUNT(*) AS common_products_count
+            FROM overlap
+            """
+        )
+
+        with self._engine.connect() as connection:
+            row = connection.execute(sql, params).mappings().one()
+        return (
+            int(row.get("common_products_count") or 0),
+            int(row.get("required_regions") or 0),
+        )
+
     def get_dynamics_series(
         self,
         *,
@@ -877,6 +1039,34 @@ class CatalogReadRepository:
         if not placeholders:
             return "NULL"
         return ", ".join(placeholders)
+
+    @staticmethod
+    def _build_text_in_clause(prefix: str, values: list[str], params: dict[str, Any]) -> str:
+        placeholders: list[str] = []
+        for index, value in enumerate(values):
+            key = f"{prefix}_{index}"
+            params[key] = str(value)
+            placeholders.append(f":{key}")
+        if not placeholders:
+            return "NULL"
+        return ", ".join(placeholders)
+
+    @staticmethod
+    def _normalize_filter_tokens(values: list[str] | None) -> list[str]:
+        if not values:
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in values:
+            token = CatalogReadRepository._safe_str(raw)
+            if token is None:
+                continue
+            normalized = token.lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            out.append(normalized)
+        return out
 
     @staticmethod
     def _safe_str(value: object) -> str | None:

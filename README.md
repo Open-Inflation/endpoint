@@ -24,6 +24,7 @@ export ENDPOINT_CATALOG_DB='sqlite:///../converter/data/catalog.db'
 - `GET /products/{canonical_product_id}/sources`
 - `GET /products/{canonical_product_id}/snapshots`
 - `GET /products/{canonical_product_id}/dynamics`
+- `GET /products/common/count`
 - `GET /categories`
 - `GET /categories/{category_id}`
 - `GET /settlements`
@@ -31,6 +32,16 @@ export ENDPOINT_CATALOG_DB='sqlite:///../converter/data/catalog.db'
 - `GET /sync/cursors`
 
 All routes are read-only (`GET` only).
+
+## Common products count endpoint
+
+`GET /products/common/count`
+
+Query params:
+
+- `scope`: `stores` | `regions`
+- `store` (repeatable): optional for `scope=stores` and `scope=regions`; если не передан при `scope=stores`, берутся все магазины
+- `region` (repeatable): optional filter for `scope=stores`; for `scope=regions` limits comparison to selected regions
 
 ## Dynamics endpoint
 
