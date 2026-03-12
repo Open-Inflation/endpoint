@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from .schemas import DynamicsField, DynamicsInterval, INTERVAL_SECONDS, coerce_datetime, to_iso_z
@@ -82,6 +82,7 @@ class CatalogReadRepository:
         sort_sql = self.PRODUCT_SORTS.get(sort)
         if sort_sql is None:
             raise ValueError(f"unsupported sort: {sort}")
+        parsers_agg_sql = self._sql_parsers_aggregate_expression()
 
         where_sql, params = self._build_products_where(
             canonical_product_id=canonical_product_id,
@@ -129,7 +130,7 @@ class CatalogReadRepository:
                     COUNT(*) AS sources_count,
                     MAX(observed_at) AS observed_at_latest,
                     MIN(COALESCE(discount_price, loyal_price, price)) AS price_from,
-                    GROUP_CONCAT(DISTINCT parser_name) AS parsers_csv
+                    {parsers_agg_sql} AS parsers_csv
                 FROM filtered
                 GROUP BY canonical_product_id
             ),
@@ -370,13 +371,8 @@ class CatalogReadRepository:
         query_sql = text(
             f"""
             SELECT
-                s.*,
-                cs.name AS settlement_name,
-                cs.region AS settlement_region,
-                cs.country AS settlement_country
+                s.*
             FROM catalog_product_snapshots s
-            LEFT JOIN catalog_settlements cs
-              ON cs.id = s.settlement_id
             {where_sql}
             ORDER BY {sort_sql}
             LIMIT :limit OFFSET :offset
@@ -387,39 +383,29 @@ class CatalogReadRepository:
             total = int(connection.execute(count_sql, params).scalar_one())
             rows = connection.execute(query_sql, params).mappings().all()
 
-        snapshot_ids = [int(row["id"]) for row in rows]
-        categories_by_snapshot = self._load_snapshot_categories(snapshot_ids)
-
         items: list[dict[str, Any]] = []
         for row in rows:
             observed_at = coerce_datetime(row["observed_at"])
             created_at = coerce_datetime(row["created_at"])
             valid_from_value = row.get("valid_from_at")
             valid_to_value = row.get("valid_to_at")
-            settlement_id = row.get("settlement_id")
             items.append(
                 {
                     "id": int(row["id"]),
                     "canonical_product_id": self._safe_str(row.get("canonical_product_id")),
                     "parser_name": self._safe_str(row.get("parser_name")),
                     "source_id": self._safe_str(row.get("source_id")),
-                    "title_original": self._safe_str(row.get("title_original")),
-                    "title_normalized_no_stopwords": self._safe_str(row.get("title_normalized_no_stopwords")),
-                    "brand": self._safe_str(row.get("brand")),
+                    "source_run_id": self._safe_str(row.get("source_run_id")),
+                    "receiver_product_id": self._as_int(row.get("receiver_product_id")),
+                    "receiver_artifact_id": self._as_int(row.get("receiver_artifact_id")),
+                    "receiver_sort_order": self._as_int(row.get("receiver_sort_order")),
+                    "source_event_uid": self._safe_str(row.get("source_event_uid")),
+                    "content_fingerprint": self._safe_str(row.get("content_fingerprint")),
                     "price": self._as_float(row.get("price")),
                     "discount_price": self._as_float(row.get("discount_price")),
                     "loyal_price": self._as_float(row.get("loyal_price")),
                     "price_unit": self._safe_str(row.get("price_unit")),
-                    "rating": self._as_float(row.get("rating")),
-                    "reviews_count": self._as_int(row.get("reviews_count")),
-                    "unit": self._safe_str(row.get("unit")),
                     "available_count": self._as_float(row.get("available_count")),
-                    "package_quantity": self._as_float(row.get("package_quantity")),
-                    "package_unit": self._safe_str(row.get("package_unit")),
-                    "category_normalized": self._safe_str(row.get("category_normalized")),
-                    "geo_normalized": self._safe_str(row.get("geo_normalized")),
-                    "composition_original": self._safe_str(row.get("composition_original")),
-                    "composition_normalized": self._safe_str(row.get("composition_normalized")),
                     "valid_from_at": (
                         to_iso_z(coerce_datetime(valid_from_value))
                         if valid_from_value is not None
@@ -432,17 +418,6 @@ class CatalogReadRepository:
                     ),
                     "observed_at": to_iso_z(observed_at),
                     "created_at": to_iso_z(created_at),
-                    "categories": categories_by_snapshot.get(int(row["id"]), []),
-                    "settlement": (
-                        {
-                            "id": int(settlement_id),
-                            "name": self._safe_str(row.get("settlement_name")),
-                            "region": self._safe_str(row.get("settlement_region")),
-                            "country": self._safe_str(row.get("settlement_country")),
-                        }
-                        if settlement_id is not None
-                        else None
-                    ),
                 }
             )
 
@@ -592,17 +567,21 @@ class CatalogReadRepository:
         return self._serialize_settlement_row(row)
 
     def list_sync_cursors(self, *, parser_name: str | None = None) -> dict[str, Any]:
+        inspector = inspect(self._engine)
+        if not inspector.has_table("converter_sync_state"):
+            return {"items": []}
+
         params: dict[str, Any] = {}
-        where_sql = "WHERE `key` LIKE :prefix"
+        where_sql = 'WHERE "key" LIKE :prefix'
         params["prefix"] = "receiver_cursor:%"
 
         if parser_name:
-            where_sql = "WHERE `key` = :exact_key"
+            where_sql = 'WHERE "key" = :exact_key'
             params["exact_key"] = f"receiver_cursor:{parser_name.strip().lower()}"
 
         sql = text(
             f"""
-            SELECT `key` AS state_key, value, updated_at
+            SELECT "key" AS state_key, value, updated_at
             FROM converter_sync_state
             {where_sql}
             ORDER BY state_key ASC
@@ -804,47 +783,6 @@ class CatalogReadRepository:
             out.setdefault(product_id, []).append(token)
         return out
 
-    def _load_snapshot_categories(self, snapshot_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
-        if not snapshot_ids:
-            return {}
-        params: dict[str, Any] = {}
-        in_clause = self._build_in_clause("sid", snapshot_ids, params)
-        sql = text(
-            f"""
-            SELECT
-                l.snapshot_id,
-                l.sort_order AS link_sort_order,
-                l.is_primary,
-                c.id AS category_id,
-                c.source_uid,
-                c.title,
-                c.depth,
-                c.sort_order AS category_sort_order
-            FROM catalog_product_category_links l
-            JOIN catalog_categories c
-              ON c.id = l.category_id
-            WHERE l.snapshot_id IN ({in_clause})
-            ORDER BY l.snapshot_id ASC, l.sort_order ASC, c.id ASC
-            """
-        )
-        with self._engine.connect() as connection:
-            rows = connection.execute(sql, params).mappings().all()
-
-        out: dict[int, list[dict[str, Any]]] = {}
-        for row in rows:
-            sid = int(row["snapshot_id"])
-            out.setdefault(sid, []).append(
-                {
-                    "id": int(row["category_id"]),
-                    "source_uid": self._safe_str(row.get("source_uid")),
-                    "title": self._safe_str(row.get("title")),
-                    "depth": self._as_int(row.get("depth")),
-                    "sort_order": self._as_int(row.get("link_sort_order")),
-                    "is_primary": self._as_bool(row.get("is_primary")),
-                }
-            )
-        return out
-
     def _build_products_where(
         self,
         *,
@@ -910,6 +848,12 @@ class CatalogReadRepository:
         if not clauses:
             return "", params
         return f"WHERE {' AND '.join(clauses)}", params
+
+    def _sql_parsers_aggregate_expression(self) -> str:
+        # Keep aggregate syntax compatible with both PostgreSQL and SQLite.
+        if self._engine.dialect.name == "postgresql":
+            return "STRING_AGG(DISTINCT parser_name, ',')"
+        return "GROUP_CONCAT(DISTINCT parser_name)"
 
     @staticmethod
     def _parse_cursor_value(value: str) -> tuple[str | None, int | None]:

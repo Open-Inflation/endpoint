@@ -8,10 +8,7 @@ class DynamicsField(str, Enum):
     PRICE = "price"
     DISCOUNT_PRICE = "discount_price"
     LOYAL_PRICE = "loyal_price"
-    RATING = "rating"
-    REVIEWS_COUNT = "reviews_count"
     AVAILABLE_COUNT = "available_count"
-    PACKAGE_QUANTITY = "package_quantity"
 
 
 class DynamicsInterval(str, Enum):

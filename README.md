@@ -40,7 +40,7 @@ Required query params:
 
 - `parser_name`
 - `source_id`
-- `field`: `price`, `discount_price`, `loyal_price`, `rating`, `reviews_count`, `available_count`, `package_quantity`
+- `field`: `price`, `discount_price`, `loyal_price`, `available_count`
 - `date_from` (ISO8601 with timezone)
 - `date_to` (ISO8601 with timezone)
 - `interval`: `1h`, `6h`, `1d`, `7d`
