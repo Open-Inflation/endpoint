@@ -79,6 +79,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    @app.get("/products/count")
+    def count_products(
+        store: list[str] | None = Query(None),
+        region: list[str] | None = Query(None),
+    ) -> dict[str, object]:
+        return repository.count_products(stores=store, regions=region)
+
     @app.get("/products/{canonical_product_id}")
     def get_product(canonical_product_id: str) -> dict[str, object]:
         payload = repository.get_product(canonical_product_id)

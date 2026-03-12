@@ -613,6 +613,47 @@ class CatalogReadRepository:
 
         return {"items": items}
 
+    def count_products(
+        self,
+        *,
+        stores: list[str] | None = None,
+        regions: list[str] | None = None,
+    ) -> dict[str, Any]:
+        normalized_stores = self._normalize_filter_tokens(stores)
+        normalized_regions = self._normalize_filter_tokens(regions)
+
+        params: dict[str, Any] = {}
+        where_clauses = ["cp.canonical_product_id IS NOT NULL"]
+        join_sql = ""
+
+        if normalized_stores:
+            store_in_clause = self._build_text_in_clause("store", normalized_stores, params)
+            where_clauses.append(f"LOWER(cp.parser_name) IN ({store_in_clause})")
+
+        if normalized_regions:
+            join_sql = "JOIN catalog_settlements cs ON cs.id = cp.settlement_id"
+            region_expr = "LOWER(COALESCE(cs.region_normalized, cs.region, ''))"
+            region_in_clause = self._build_text_in_clause("reg", normalized_regions, params)
+            where_clauses.append(f"{region_expr} IN ({region_in_clause})")
+
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+        sql = text(
+            f"""
+            SELECT COUNT(DISTINCT cp.canonical_product_id) AS products_count
+            FROM catalog_products cp
+            {join_sql}
+            {where_sql}
+            """
+        )
+        with self._engine.connect() as connection:
+            products_count = int(connection.execute(sql, params).scalar_one() or 0)
+
+        return {
+            "products_count": products_count,
+            "stores": normalized_stores or None,
+            "regions": normalized_regions or None,
+        }
+
     def count_common_products(
         self,
         *,

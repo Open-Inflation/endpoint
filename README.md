@@ -20,6 +20,7 @@ export ENDPOINT_CATALOG_DB='sqlite:///../converter/data/catalog.db'
 
 - `GET /healthz`
 - `GET /products`
+- `GET /products/count`
 - `GET /products/{canonical_product_id}`
 - `GET /products/{canonical_product_id}/sources`
 - `GET /products/{canonical_product_id}/snapshots`
@@ -32,6 +33,19 @@ export ENDPOINT_CATALOG_DB='sqlite:///../converter/data/catalog.db'
 - `GET /sync/cursors`
 
 All routes are read-only (`GET` only).
+
+## Products count endpoint
+
+`GET /products/count`
+
+Query params:
+
+- `store` (repeatable): фильтр по магазину (`parser_name`)
+- `region` (repeatable): фильтр по региону (`catalog_settlements.region_normalized`/`region`)
+
+Response:
+
+- `products_count`: количество уникальных товаров (`COUNT(DISTINCT canonical_product_id)`)
 
 ## Common products count endpoint
 

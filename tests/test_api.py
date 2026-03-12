@@ -526,6 +526,37 @@ class EndpointApiTests(unittest.TestCase):
         self.assertEqual(payload["required_stores"], 2)
         self.assertEqual(payload["common_products_count"], 1)
 
+    def test_products_count(self) -> None:
+        total = self.client.get("/products/count")
+        self.assertEqual(total.status_code, 200)
+        self.assertEqual(total.json()["products_count"], 2)
+
+        fixprice = self.client.get("/products/count", params={"store": "fixprice"})
+        self.assertEqual(fixprice.status_code, 200)
+        self.assertEqual(fixprice.json()["products_count"], 2)
+
+        chizhik = self.client.get("/products/count", params={"store": "chizhik"})
+        self.assertEqual(chizhik.status_code, 200)
+        self.assertEqual(chizhik.json()["products_count"], 1)
+
+        moscow = self.client.get("/products/count", params={"region": "moscow"})
+        self.assertEqual(moscow.status_code, 200)
+        self.assertEqual(moscow.json()["products_count"], 2)
+
+        combo = self.client.get(
+            "/products/count",
+            params=[
+                ("store", "chizhik"),
+                ("region", "moscow"),
+            ],
+        )
+        self.assertEqual(combo.status_code, 200)
+        self.assertEqual(combo.json()["products_count"], 1)
+
+        unknown_region = self.client.get("/products/count", params={"region": "spb"})
+        self.assertEqual(unknown_region.status_code, 200)
+        self.assertEqual(unknown_region.json()["products_count"], 0)
+
     def test_common_products_count_for_two_stores(self) -> None:
         response = self.client.get(
             "/products/common/count",
